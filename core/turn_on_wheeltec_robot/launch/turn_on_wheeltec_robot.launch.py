@@ -47,10 +47,9 @@ def generate_launch_description():
 
     robot_ekf = launch_ros.actions.Node(
             condition=UnlessCondition(carto_slam),
-            package='robot_localization', 
-            executable='ekf_node', 
+            package='robot_localization',
+            executable='ekf_node',
             parameters=[ekf_config],
-            remappings=[("odometry/filtered", "odom_combined")]
             )
                               
     joint_state_publisher_node = launch_ros.actions.Node(
