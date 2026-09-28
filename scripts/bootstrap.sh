@@ -154,7 +154,26 @@ install_rule "$ORBBEC_RULE" /etc/udev/rules.d/99-obsensor-libusb.rules || \
 run "sudo udevadm control --reload-rules"
 run "sudo udevadm trigger"
 
-# --- 5. .bashrc source line -------------------------------------------------
+# --- 5. NetworkManager overrides --------------------------------------------
+
+# WiFi power save adds tens of ms wake-up latency to small SSH/ROS bursts.
+# Ship a conf.d override that outranks Ubuntu's shipped default-wifi-powersave-on.conf.
+NM_OVERRIDE_SRC="$REPO_DIR/scripts/networkmanager/zz-wifi-powersave-off.conf"
+NM_OVERRIDE_DST="/etc/NetworkManager/conf.d/zz-wifi-powersave-off.conf"
+
+if [[ -f "$NM_OVERRIDE_SRC" && -d /etc/NetworkManager/conf.d ]]; then
+    if [[ -f "$NM_OVERRIDE_DST" ]] && cmp -s "$NM_OVERRIDE_SRC" "$NM_OVERRIDE_DST"; then
+        log "NetworkManager override already up to date: $NM_OVERRIDE_DST"
+    else
+        log "installing NetworkManager override: $NM_OVERRIDE_DST"
+        run "sudo install -m 0644 $NM_OVERRIDE_SRC $NM_OVERRIDE_DST"
+        run "sudo systemctl reload NetworkManager"
+    fi
+else
+    log "NetworkManager not present or source missing; skipping WiFi PSM override"
+fi
+
+# --- 6. .bashrc source line -------------------------------------------------
 
 BASHRC_LINE="source /opt/ros/${ROS_DISTRO}/setup.bash"
 if ! grep -qF "$BASHRC_LINE" "$HOME/.bashrc" 2>/dev/null; then
@@ -166,7 +185,7 @@ else
     log "~/.bashrc already sources /opt/ros/${ROS_DISTRO}/setup.bash"
 fi
 
-# --- 6. Workspace rosdep + build --------------------------------------------
+# --- 7. Workspace rosdep + build --------------------------------------------
 
 # ROS's setup.bash references vars that may be unset; nounset would abort.
 set +u
@@ -184,7 +203,7 @@ else
     log "--no-build set; skipping colcon build"
 fi
 
-# --- 7. Summary -------------------------------------------------------------
+# --- 8. Summary -------------------------------------------------------------
 
 cat <<EOF
 

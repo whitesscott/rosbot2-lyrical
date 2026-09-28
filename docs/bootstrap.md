@@ -35,10 +35,11 @@ The script is idempotent: running it twice is safe. It skips work that's already
 3. **Apt packages** — installs 28 packages: ROS Kilted desktop + build tooling, workspace runtime deps that rosdep would otherwise pull, the camera fallback (`v4l2-camera`) and web preview (`web-video-server`), plus system libs (PCL, PCAP, FFmpeg, YAML, Eigen, gflags) and dev tools.
 4. **rosdep init + update** — bootstraps rosdep, then refreshes the cache.
 5. **udev rules** — installs `scripts/udev/99-wheeltec.rules` (STM32 + M10 symlinks) and, if the vendor tree is present, `vendor/OrbbecSDK_ROS2/orbbec_camera/scripts/99-obsensor-libusb.rules` (Astra libusb permissions). Reloads udev and triggers.
-6. **`~/.bashrc`** — appends `source /opt/ros/kilted/setup.bash` unless the line is already there.
-7. **Workspace rosdep** — resolves per-package.xml deps under `core/`, `mapping/`, `navigation/`, `utils/`, `vendor/`.
-8. **`colcon build --symlink-install`** — full workspace build (unless `--no-build`).
-9. **Summary** — prints "next steps" (source overlay, launch commands, diagnostic pointers).
+6. **NetworkManager overrides** — installs `scripts/networkmanager/zz-wifi-powersave-off.conf` to `/etc/NetworkManager/conf.d/`, disabling WiFi power save. Removes 10–100 ms SSH keystroke wake-up latency; on this Orin it cut ping avg 4.3 → 2.3 ms and mdev 3.6 → 1.1 ms.
+7. **`~/.bashrc`** — appends `source /opt/ros/kilted/setup.bash` unless the line is already there.
+8. **Workspace rosdep** — resolves per-package.xml deps under `core/`, `mapping/`, `navigation/`, `utils/`, `vendor/`.
+9. **`colcon build --symlink-install`** — full workspace build (unless `--no-build`).
+10. **Summary** — prints "next steps" (source overlay, launch commands, diagnostic pointers).
 
 ## What it does NOT do
 
