@@ -174,15 +174,14 @@ Ceratin packages also require specific dependencies, please refer to the individ
 
 ### Setup
 
-1. Run the following script to set up the serial devices:
-    ```sh
-    sudo chmod +x ./src/transbot/turn_on_wheeltec_robot/wheeltec_udev.sh
-    sudo ./src/transbot/turn_on_wheeltec_robot/wheeltec_udev.sh
-    ```
+On the `kilted` branch (AGX Orin / JetPack 7.2.1 / Ubuntu 24.04 / ROS 2 Kilted), a single script provisions apt sources, workspace deps, udev rules, rosdep, and the initial `colcon build`:
 
-2. Follow the README in the ros2_astra_camera package to set up the camera
+```sh
+./scripts/bootstrap.sh          # full bring-up
+./scripts/bootstrap.sh --dry-run
+```
 
-TODO
+See [`docs/bootstrap.md`](docs/bootstrap.md) for what it does, what it deliberately skips, and how to port the setup to another Orin.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -205,7 +204,11 @@ Debugging tools are available in the ROS2 framework.
 - rqt
 - rviz
 
-TODO
+### In-repo references
+
+- [`docs/bootstrap.md`](docs/bootstrap.md) — what `scripts/bootstrap.sh` does, and how to reproduce the setup on another Orin.
+- [`docs/tf_tree.md`](docs/tf_tree.md) — expected tf2 frame graph for the mini_akm, per-edge broadcaster/rate table, regeneration commands, and common failure modes.
+- [`docs/local_http_view.md`](docs/local_http_view.md) — quick recipe for serving files (view_frames PDFs, logs, screenshots) over HTTP so you can preview them in a browser while working over SSH.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
