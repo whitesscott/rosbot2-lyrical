@@ -207,6 +207,7 @@ Debugging tools are available in the ROS2 framework.
 ### In-repo references
 
 - [`docs/bootstrap.md`](docs/bootstrap.md) — what `scripts/bootstrap.sh` does, and how to reproduce the setup on another Orin.
+- [`docs/runtime_bringup.md`](docs/runtime_bringup.md) — the exact command lines to launch every ROS 2 subsystem (base, RPLIDAR, camera, slam_toolbox, web preview), the slam_toolbox lifecycle transitions, health-check one-liners, and shutdown patterns.
 - [`docs/tf_tree.md`](docs/tf_tree.md) — expected tf2 frame graph for the mini_akm, per-edge broadcaster/rate table, regeneration commands, and common failure modes.
 - [`docs/local_http_view.md`](docs/local_http_view.md) — quick recipe for serving files (view_frames PDFs, logs, screenshots) over HTTP so you can preview them in a browser while working over SSH.
 
