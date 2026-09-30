@@ -100,10 +100,6 @@ APT_PACKAGES=(
     "ros-${ROS_DISTRO}-v4l2-camera"
     "ros-${ROS_DISTRO}-web-video-server"
 
-    # Front-end connectivity: Foxglove Studio + iPhone Wheeltec app (rosbridge)
-    "ros-${ROS_DISTRO}-foxglove-bridge"
-    "ros-${ROS_DISTRO}-rosbridge-server"
-
     # System libs and dev tools
     "libpcl-dev"
     "libpcap0.8-dev"
@@ -119,8 +115,26 @@ APT_PACKAGES=(
     "git-lfs"
 )
 
-log "installing ${#APT_PACKAGES[@]} apt packages (skipping any already installed)"
+log "installing ${#APT_PACKAGES[@]} core apt packages (skipping any already installed)"
 run "sudo apt-get install -y --no-install-recommends ${APT_PACKAGES[*]}"
+
+# Front-end connectivity: Foxglove Studio (foxglove_bridge) and the iPhone
+# Wheeltec teleop app (rosbridge_server). Nice to have but not core to
+# building or running the robot, so install best-effort — if the arm64
+# kilted release lags, don't abort the whole bootstrap.
+OPTIONAL_FRONTEND_PACKAGES=(
+    "ros-${ROS_DISTRO}-foxglove-bridge"
+    "ros-${ROS_DISTRO}-rosbridge-server"
+)
+log "installing ${#OPTIONAL_FRONTEND_PACKAGES[@]} optional front-end packages (best-effort)"
+if [[ "$DRY_RUN" == 1 ]]; then
+    printf '\033[90m[dry-run]\033[0m %s\n' "sudo apt-get install -y --no-install-recommends ${OPTIONAL_FRONTEND_PACKAGES[*]}"
+else
+    if ! sudo apt-get install -y --no-install-recommends "${OPTIONAL_FRONTEND_PACKAGES[@]}"; then
+        warn "front-end packages not installed — foxglove_bridge / rosbridge_server may not be released for kilted on arm64 yet"
+        warn "workspace still usable; retry when the packages land, or install from source"
+    fi
+fi
 
 # --- 3. rosdep init + update ------------------------------------------------
 

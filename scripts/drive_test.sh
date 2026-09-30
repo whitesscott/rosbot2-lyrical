@@ -69,6 +69,8 @@ wait_for_node() {
 }
 
 cleanup() {
+    # Disarm the trap so a normal exit or a second Ctrl-C doesn't re-enter.
+    trap - INT TERM EXIT
     echo ""
     echo "[drive_test] shutting down..."
     if (( ${#PIDS[@]} > 0 )); then
@@ -76,12 +78,23 @@ cleanup() {
         sleep 2
         kill -9 "${PIDS[@]}" 2>/dev/null
     fi
-    # Belt + suspenders: nuke anything ROS-ish that survived reparenting to init
-    pkill -f "wheeltec_robot_node|sllidar_node|v4l2_camera_node|async_slam_toolbox|ekf_node|static_transform_publisher|joint_state_publisher|cmd_vel_to_ackermann|foxglove_bridge|memory_node|rosbridge|web_video_server" 2>/dev/null
+    # Belt + suspenders: ros2 launch's children reparent to init on signal,
+    # so kill the specific reparented nodes. Anchor patterns to install-path
+    # fragments so we can't accidentally match an unrelated user process
+    # (e.g. `less some_rosbridge.log`).
+    pkill -x static_transform_publisher 2>/dev/null
+    pkill -x rosbridge_websocket 2>/dev/null
+    pkill -x web_video_server 2>/dev/null
+    pkill -f 'install/[^/]*/lib/[^/]*/(wheeltec_robot_node|sllidar_node|v4l2_camera_node|async_slam_toolbox_node|memory_node|foxglove_bridge)$' 2>/dev/null
+    pkill -f 'install/turn_on_wheeltec_robot/lib/turn_on_wheeltec_robot/cmd_vel_to_ackermann_drive\.py$' 2>/dev/null
+    pkill -f 'robot_localization/ekf_node' 2>/dev/null
+    pkill -f 'joint_state_publisher/joint_state_publisher' 2>/dev/null
     echo "[drive_test] done"
-    exit 0
 }
-trap cleanup SIGINT SIGTERM
+# EXIT fires on any exit path (Ctrl-C, SIGTERM, or `wait` returning because
+# every launch crashed) — earlier this trap only handled signals, so a
+# natural exit path left orphaned nodes running.
+trap cleanup INT TERM EXIT
 
 # --- launch sequence ------------------------------------------------------
 
@@ -99,6 +112,14 @@ start camera     ros2 launch turn_on_wheeltec_robot wheeltec_camera_uvc.launch.p
 sleep 2
 
 SLAM_CFG="${WHEELBOTS}/install/wheeltec_slam_toolbox/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml"
+# Guard: without the install-space params file, slam_toolbox exits silently
+# and the operator drives thinking mapping is happening.
+if [ ! -f "$SLAM_CFG" ]; then
+    echo "[drive_test] !! SLAM params file missing:"
+    echo "                ${SLAM_CFG}"
+    echo "                did you 'colcon build' the workspace yet?"
+    exit 1
+fi
 start slam       ros2 run slam_toolbox async_slam_toolbox_node \
     --ros-args --params-file "${SLAM_CFG}" -r odom:=odometry/filtered
 
@@ -114,11 +135,20 @@ fi
 
 if [ "${ENABLE_MEMORY_NODE}" = "1" ]; then
     sleep 2
-    export HF_HOME="${HOME}/.cache/huggingface"
-    export HF_HUB_CACHE="${HOME}/.cache/huggingface/hub"
-    unset HF_TOKEN
-    export PYTHONPATH="${HOME}/.venvs/robot/lib/python3.12/site-packages:${PYTHONPATH:-}"
-    start memory  ros2 run robot_memory memory_node
+    # Scope env vars to just the memory_node process via `env` — earlier we
+    # exported PYTHONPATH into the parent shell, and the venv's numpy/urllib3
+    # then infected the subsequent `ros2` CLI calls (lifecycle set,
+    # node list), silently breaking slam_toolbox activation.
+    VENV_SITE="${HOME}/.venvs/robot/lib/python3.12/site-packages"
+    if [ ! -d "$VENV_SITE" ]; then
+        echo "  ! memory_node skipped: $VENV_SITE not found (rebuild venv?)"
+    else
+        start memory env -u HF_TOKEN \
+            HF_HOME="${HOME}/.cache/huggingface" \
+            HF_HUB_CACHE="${HOME}/.cache/huggingface/hub" \
+            PYTHONPATH="${VENV_SITE}${PYTHONPATH:+:${PYTHONPATH}}" \
+            ros2 run robot_memory memory_node
+    fi
 fi
 
 # --- wait for slam then activate ------------------------------------------
@@ -126,14 +156,22 @@ fi
 echo ""
 echo "[drive_test] waiting for /slam_toolbox to register..."
 if wait_for_node "/slam_toolbox" 30; then
-    ros2 lifecycle set /slam_toolbox configure > /dev/null && \
-    ros2 lifecycle set /slam_toolbox activate  > /dev/null && \
+    if ros2 lifecycle set /slam_toolbox configure > /dev/null 2>&1 && \
+       ros2 lifecycle set /slam_toolbox activate  > /dev/null 2>&1; then
         echo "[drive_test] slam_toolbox active"
+    else
+        echo "[drive_test] !! slam_toolbox activation FAILED — check ${LOG_DIR}/slam.log"
+    fi
+else
+    echo "[drive_test] !! /slam_toolbox never registered — check ${LOG_DIR}/slam.log"
 fi
 
 # --- print connection info ------------------------------------------------
 
-IP=$(ip -brief addr show | awk '$2=="UP" && $3 ~ /^192\./ {split($3,a,"/"); print a[1]; exit}')
+# Use the default-route source IP so we get whichever interface is actually
+# routing to the outside — works on 192.168/*, 10/*, 172.16/12, Tailscale,
+# ethernet-only setups etc., not just the earlier `/^192\./` regex.
+IP=$(ip -4 route get 1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')
 IP="${IP:-<orin-ip>}"
 
 cat <<EOF
