@@ -100,6 +100,10 @@ APT_PACKAGES=(
     "ros-${ROS_DISTRO}-v4l2-camera"
     "ros-${ROS_DISTRO}-web-video-server"
 
+    # Front-end connectivity: Foxglove Studio + iPhone Wheeltec app (rosbridge)
+    "ros-${ROS_DISTRO}-foxglove-bridge"
+    "ros-${ROS_DISTRO}-rosbridge-server"
+
     # System libs and dev tools
     "libpcl-dev"
     "libpcap0.8-dev"

@@ -207,7 +207,7 @@ Debugging tools are available in the ROS2 framework.
 ### In-repo references
 
 - [`docs/bootstrap.md`](docs/bootstrap.md) — what `scripts/bootstrap.sh` does, and how to reproduce the setup on another Orin.
-- [`docs/runtime_bringup.md`](docs/runtime_bringup.md) — the exact command lines to launch every ROS 2 subsystem (base, RPLIDAR, camera, slam_toolbox, web preview), the slam_toolbox lifecycle transitions, health-check one-liners, and shutdown patterns.
+- [`docs/runtime_bringup.md`](docs/runtime_bringup.md) — the exact command lines to launch every ROS 2 subsystem (base, RPLIDAR, camera, slam_toolbox, web preview), the slam_toolbox lifecycle transitions, health-check one-liners, and shutdown patterns. For a one-shot session, use `scripts/drive_test.sh` (documented in that file's header).
 - [`docs/tf_tree.md`](docs/tf_tree.md) — expected tf2 frame graph for the mini_akm, per-edge broadcaster/rate table, regeneration commands, and common failure modes.
 - [`docs/odom_calibration.md`](docs/odom_calibration.md) — measured wheel-odom overcount factor (~0.60 real / odom on this mini_akm), the `odom_scaler` node that corrects it, and a re-measurement recipe.
 - [`docs/local_http_view.md`](docs/local_http_view.md) — quick recipe for serving files (view_frames PDFs, logs, screenshots) over HTTP so you can preview them in a browser while working over SSH.
