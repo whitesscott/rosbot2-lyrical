@@ -186,8 +186,7 @@ See [`docs/bootstrap.md`](docs/bootstrap.md) for what it does, what it deliberat
 On the `lyrical` branch the stack runs in a container on top of the Isaac ROS + ZED image (ROS 2 Lyrical), together with the `robot_memory` VLM node in `ai/`:
 
 ```sh
-./scripts/docker_run.sh image   # build wheelbots:lyrical
-./scripts/docker_run.sh build   # colcon build inside the container
+./scripts/docker_run.sh image   # build rosbot2:lyrical (ZED SDK, Isaac ROS, this workspace)
 ./scripts/docker_run.sh /opt/wheelbots_ws/src/wheelbots/scripts/drive_test.sh
 ```
 

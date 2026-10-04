@@ -1,17 +1,31 @@
 # Lyrical container (Isaac ROS + ZED)
 
-On the `lyrical` branch the stack runs inside a container instead of on the host. The image is a thin layer over the Isaac ROS + ZED image built by `isaac-ros-cli` (`isaac_ros_dev-zed:latest`: ROS 2 Lyrical, CUDA, ZED SDK, `zed-ros2-wrapper`), so the robot base, lidar, SLAM, Nav2, the ZED wrapper and the `robot_memory` VLM node all share one ROS graph and one GPU runtime.
+On the `lyrical` branch the stack runs inside a container instead of on the host. `docker/Dockerfile.rosbot2` builds one self-contained image, `rosbot2:lyrical`, so the robot base, lidar, SLAM, Nav2, the ZED wrapper, Isaac ROS perception and the `robot_memory` VLM node all share one ROS graph and one GPU runtime:
 
-## One-time setup
+| Layer | Contents |
+|---|---|
+| base | `nvcr.io/nvidia/isaac/ros:isaac_ros_…-arm64-jetpack` (ROS 2 Lyrical + Isaac ROS apt setup) |
+| JetPack | CUDA 13.2 toolkit, cuDNN, TensorRT, VPI from the L4T r39.2 repository |
+| ZED | ZED SDK 5.5.0 (downloaded and checksum-verified) + `zed-ros2-wrapper` v5.5.0 in `/opt/ros_ws` |
+| apt | Nav2, slam_toolbox, robot_localization, rosbridge + rosapi, foxglove, RViz and plugins |
+| Isaac ROS | nvblox, cuVSLAM, `isaac_ros_zed`, image pipeline, AprilTag, occupancy-grid localizer, jetson-stats, CUDA buffer backend |
+| PyTorch | `torch` + `torchvision` (cu132 wheels) and the `robot_memory` dependencies in the venv `/opt/robot-venv` |
+| workspace | this repository, built in `/opt/wheelbots_ws` |
 
-Host prerequisites (unchanged from `kilted`, see [`bootstrap.md`](bootstrap.md)): the udev rules that create `/dev/wheeltec_controller` and `/dev/wheeltec_laser`, and the `isaac_ros_dev-zed:latest` image.
+Nothing in it depends on a locally built image or on files outside the repository, so the same command builds it on an AGX Orin and on a Jetson Thor. Both must run JetPack 7.2.x (L4T r39.2): the JetPack apt repository and the ZED SDK build are specific to that release.
+
+## Build
 
 ```sh
-./scripts/docker_run.sh image    # build wheelbots:lyrical (apt deps only)
-./scripts/docker_run.sh build    # colcon build --symlink-install in the container
+./scripts/docker_run.sh image
+# equivalent: docker build -f docker/Dockerfile.rosbot2 -t rosbot2:lyrical .
 ```
 
-`image` passes `--builder default` on purpose: a docker-container buildx builder cannot see the local base image.
+Build arguments: `ZED_SDK_URL` / `ZED_SDK_SHA256`, `ZED_WRAPPER_VERSION`, and `ISAAC_ROS_PACKAGES` (pass an empty value to leave the Isaac ROS layer out and save about 7 GB).
+
+Host prerequisites for driving the robot (not needed just to build): the udev rules in `scripts/udev/` that create `/dev/wheeltec_controller` and `/dev/wheeltec_laser`, see [`bootstrap.md`](bootstrap.md).
+
+`docker/Dockerfile.lyrical` is the earlier thin layer over a locally built `isaac_ros_dev-zed` image; `Dockerfile.rosbot2` supersedes it.
 
 ## Daily use
 
@@ -22,23 +36,30 @@ ENABLE_MEMORY_NODE=1 ./scripts/docker_run.sh /opt/wheelbots_ws/src/wheelbots/scr
 ./scripts/docker_run.sh ros2 launch wheeltec_nav2 wheeltec_nav2.launch.py
 ```
 
+By default the container runs the workspace built into the image. For development, `--dev` mounts this checkout over the baked sources and keeps `build/install/log` in the docker volume `wheelbots_lyrical_ws`:
+
+```sh
+./scripts/docker_run.sh --dev            # shell with the checkout mounted; launch/config/Python edits are live
+./scripts/docker_run.sh build            # colcon build the checkout (implies --dev)
+```
+
+`docker volume rm wheelbots_lyrical_ws` gives a clean rebuild. After rebuilding the image, do that too, or the volume keeps the older build.
+
 The container is `--rm`: it goes away when its first command exits. Everything that must persist is mounted:
 
 | In the container | On the host | Notes |
 |---|---|---|
-| `/opt/wheelbots_ws/src/wheelbots` | this repo | edits are live (`--symlink-install`) |
-| `/opt/wheelbots_ws/{build,install,log}` | docker volume `wheelbots_lyrical_ws` | kept apart from a host-side Kilted build in the repo; `docker volume rm wheelbots_lyrical_ws` for a clean rebuild |
-| `/opt/robot-venv` (read-only) | `~/.venvs/robot` | torch + transformers for `robot_memory` |
+| `/opt/robot-venv` (read-only) | `$ROBOT_VENV` | only when `ROBOT_VENV` is set: a host venv replaces the one in the image |
 | `/root/.cache/huggingface` | `~/.cache/huggingface` | model weights |
 | `/root/.local/share/robot-map` | `~/.local/share/robot-map` | keyframe thumbnails + Chroma DB |
 | `/usr/local/zed/{settings,resources}` | `~/.zed/{settings,resources}` | calibration, optimized depth models |
-| `/workspaces/isaac_ros-dev` | `~/workspaces/isaac_ros-dev` | `scripts/zed-up.sh`, Isaac ROS sources |
+| `/workspaces/isaac_ros-dev` | `~/workspaces/isaac_ros-dev` | `scripts/zed-up.sh`, Isaac ROS sources; skipped if absent |
 
 The container runs as root, so files it creates in those host directories are root-owned. To use them from the host again: `sudo chown -R $USER ~/.local/share/robot-map`.
 
 ## AI: `robot_memory`
 
-`ai/robot_memory` is the spatial-memory package (previously the separate `robot-map` repo): keyframes are captioned by Qwen3-VL-2B on the GPU, embedded, and stored in Chroma with the robot pose. torch is not in the image; `drive_test.sh` puts the mounted host venv (`ROBOT_VENV_SITE`) on `PYTHONPATH` for the `memory_node` process only, so it cannot shadow the numpy that the `ros2` CLI needs.
+`ai/robot_memory` is the spatial-memory package (previously the separate `robot-map` repo): keyframes are captioned by Qwen3-VL-2B on the GPU, embedded, and stored in Chroma with the robot pose. torch lives in the image's venv `/opt/robot-venv`, not in system Python; `drive_test.sh` puts it (`ROBOT_VENV_SITE`) on `PYTHONPATH` for the `memory_node` process only, so it cannot shadow the numpy that the `ros2` CLI needs.
 
 ```sh
 # standalone, in a container shell
@@ -68,7 +89,7 @@ ENABLE_CAMERA=0 ENABLE_MEMORY_NODE=1 IMAGE_TOPIC=/zed/zed_node/rgb/color/rect/im
     ./scripts/docker_run.sh /opt/wheelbots_ws/src/wheelbots/scripts/drive_test.sh   # terminal 2
 ```
 
-Still to do when it arrives: replace the `base_to_camera` static transform in `robot_mode_description.launch.py` with the measured ZED mount pose (and let the wrapper publish the camera's own frames), check the topic name above against `ros2 topic list`, and feed ZED depth into the Nav2 costmaps or nvblox (`ros-lyrical-isaac-ros-nvblox` is available from apt).
+Still to do when it arrives: replace the `base_to_camera` static transform in `robot_mode_description.launch.py` with the measured ZED mount pose (and let the wrapper publish the camera's own frames), check the topic name above against `ros2 topic list`, and feed ZED depth into the Nav2 costmaps through nvblox (`nvblox_nav2`, already in the image).
 
 ## What changed for Lyrical
 
@@ -81,4 +102,3 @@ Still to do when it arrives: replace the `base_to_camera` static transform in `r
 
 - `ros-lyrical-pcl-ros` / `pcl-conversions` (need libpcl 1.15) — only the ignored `lslidar_driver` used them.
 - `cartographer_ros`, `rtabmap_ros` — the `wheeltec_cartographer` and `wheeltec_robot_rtab` launch files build but cannot run.
-- `isaac_ros_visual_slam` has no apt package; build it from `~/workspaces/isaac_ros-dev/src` if wanted.

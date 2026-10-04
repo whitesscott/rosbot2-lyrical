@@ -1,43 +1,59 @@
 #!/usr/bin/env bash
-# Start the wheelbots Lyrical container (Isaac ROS + ZED base), or open
+# Start the rosbot2 Lyrical container (Isaac ROS + ZED + wheelbots), or open
 # another shell in it if it is already running.
 #
 # Usage:
+#   ./scripts/docker_run.sh image            build the rosbot2:lyrical image
 #   ./scripts/docker_run.sh                  interactive shell
-#   ./scripts/docker_run.sh build [args...]  colcon build the workspace
-#   ./scripts/docker_run.sh image            (re)build the wheelbots:lyrical image
 #   ./scripts/docker_run.sh <command...>     run a command with ROS sourced, e.g.
 #       ./scripts/docker_run.sh /opt/wheelbots_ws/src/wheelbots/scripts/drive_test.sh
+#   ./scripts/docker_run.sh --dev [command...]
+#                                            same, with this checkout mounted
+#                                            over the sources baked into the image
+#   ./scripts/docker_run.sh build [args...]  colcon build the mounted checkout
+#                                            (implies --dev)
+#
+# By default the container runs the workspace that was built into the image.
+# With --dev, this checkout is bind-mounted at /opt/wheelbots_ws/src/wheelbots
+# and build/install/log live in a named volume, so edits are live and a
+# rebuild survives the container. Without --dev, changes need a new image.
 #
 # Layout inside the container:
-#   /opt/wheelbots_ws                 colcon workspace (named volume, so the
-#                                     Lyrical build/install/log never touch a
-#                                     host-side Kilted build in the repo)
-#   /opt/wheelbots_ws/src/wheelbots   this repo (bind mount)
+#   /opt/wheelbots_ws                 colcon workspace (image, or volume with --dev)
+#   /opt/wheelbots_ws/src/wheelbots   this repo (image copy, or bind mount with --dev)
 #   /opt/ros_ws                       zed-ros2-wrapper workspace (from the image)
-#   /opt/robot-venv                   host uv venv with torch/transformers for
-#                                     robot_memory (read-only, if present)
+#   /opt/robot-venv                   venv with torch/transformers for
+#                                     robot_memory (from the image, or a host
+#                                     venv when ROBOT_VENV is set)
 #
 # Environment:
-#   WHEELBOTS_IMAGE   image tag (default: wheelbots:lyrical)
-#   ROBOT_VENV        host venv for robot_memory (default: ~/.venvs/robot)
+#   WHEELBOTS_IMAGE   image tag (default: rosbot2:lyrical)
+#   WHEELBOTS_DEV     1 = same as --dev
+#   ROBOT_VENV        host venv to mount over the image's /opt/robot-venv
+#                     (default: unset, use the venv in the image)
 #   ISAAC_ROS_WS      Isaac ROS workspace to mount (default: ~/workspaces/isaac_ros-dev)
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${WHEELBOTS_IMAGE:-wheelbots:lyrical}"
+IMAGE="${WHEELBOTS_IMAGE:-rosbot2:lyrical}"
+DEV="${WHEELBOTS_DEV:-0}"
 NAME="wheelbots-lyrical"
 WS_VOLUME="wheelbots_lyrical_ws"
-ROBOT_VENV="${ROBOT_VENV:-$HOME/.venvs/robot}"
+ROBOT_VENV="${ROBOT_VENV:-}"
 ISAAC_WS="${ISAAC_ROS_WS:-$HOME/workspaces/isaac_ros-dev}"
 ZED_SETTINGS="$HOME/.zed/settings"
 ZED_RESOURCES="$HOME/.zed/resources"
 
 if [ "${1:-}" = "image" ]; then
-  # The default builder is named explicitly: a docker-container builder (such
-  # as a selected buildx 'cuda' builder) cannot see the local base image.
+  # The default builder writes straight into the local image store; a
+  # docker-container builder would have to export and re-load ~35 GB.
   exec docker buildx build --builder default --load \
-    -f "$REPO_DIR/docker/Dockerfile.lyrical" -t "$IMAGE" "$REPO_DIR/docker"
+    -f "$REPO_DIR/docker/Dockerfile.rosbot2" -t "$IMAGE" "$REPO_DIR"
+fi
+
+if [ "${1:-}" = "--dev" ]; then
+  DEV=1
+  shift
 fi
 
 if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
@@ -50,6 +66,7 @@ fi
 if [ "$#" -eq 0 ]; then
   set -- bash
 elif [ "$1" = "build" ]; then
+  DEV=1
   shift
   set -- bash -ic 'cd "$WHEELBOTS_WS" && exec colcon build --symlink-install "$@"' bash "$@"
 else
@@ -76,13 +93,21 @@ if [ -n "${DISPLAY:-}" ]; then
   esac
 fi
 
+# --dev: this checkout over the baked sources, build tree in a named volume.
+DEV_ARGS=()
+if [ "$DEV" = "1" ]; then
+  DEV_ARGS=(-v "$WS_VOLUME":/opt/wheelbots_ws -v "$REPO_DIR":/opt/wheelbots_ws/src/wheelbots)
+fi
+
 OPT_ARGS=()
 
-# robot_memory: torch/transformers venv, model cache, and the keyframe store.
-if [ -d "$ROBOT_VENV/lib/python3.12/site-packages" ]; then
-  OPT_ARGS+=(-v "$ROBOT_VENV":/opt/robot-venv:ro)
-else
-  echo "note: $ROBOT_VENV not found; memory_node will be unavailable." >&2
+# robot_memory: optional host venv override, model cache, and the keyframe store.
+if [ -n "$ROBOT_VENV" ]; then
+  if [ -d "$ROBOT_VENV/lib/python3.12/site-packages" ]; then
+    OPT_ARGS+=(-v "$ROBOT_VENV":/opt/robot-venv:ro)
+  else
+    echo "note: ROBOT_VENV=$ROBOT_VENV has no python3.12 site-packages; using the image's venv." >&2
+  fi
 fi
 mkdir -p "$HOME/.cache/huggingface" "$HOME/.local/share/robot-map"
 OPT_ARGS+=(-v "$HOME/.cache/huggingface":/root/.cache/huggingface)
@@ -109,7 +134,6 @@ exec docker run "${TTY_ARGS[@]}" --rm --name "$NAME" \
   -e ENABLE_ROSBRIDGE -e ENABLE_WEB_VIDEO -e ENABLE_MEMORY_NODE -e ENABLE_CAMERA -e IMAGE_TOPIC \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -v /dev:/dev \
-  -v "$WS_VOLUME":/opt/wheelbots_ws \
-  -v "$REPO_DIR":/opt/wheelbots_ws/src/wheelbots \
+  "${DEV_ARGS[@]}" \
   "${OPT_ARGS[@]}" \
   "$IMAGE" "$@"

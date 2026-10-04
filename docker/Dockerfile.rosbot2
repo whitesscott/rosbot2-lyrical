@@ -1,0 +1,329 @@
+# syntax=docker/dockerfile:1
+#
+# Self-contained image for the Wheeltec rosbot2 (mini_akm) on a Jetson:
+#   Isaac ROS base (ROS 2 Lyrical)
+#   + JetPack 7.2 / L4T r39.2 developer components (CUDA, cuDNN, TensorRT, VPI)
+#   + ZED SDK and zed-ros2-wrapper        (/usr/local/zed, /opt/ros_ws)
+#   + the wheelbots workspace, built      (/opt/wheelbots_ws)
+#
+# Unlike Dockerfile.lyrical, nothing here depends on a locally built image or
+# on files outside this repository, so it builds the same way on an AGX Orin
+# and on a Jetson Thor (both on JetPack 7.2.x / L4T r39.2).
+#
+# Build from the repository root (the build context is the repo):
+#   docker build -f docker/Dockerfile.rosbot2 -t rosbot2:lyrical .
+# or
+#   ./scripts/docker_run.sh image
+ARG BASE_IMAGE=nvcr.io/nvidia/isaac/ros:isaac_ros_1742a70509cba44cb1943ab200bbece1-arm64-jetpack
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN if [[ "$(uname -m)" != "aarch64" ]]; then \
+        echo "This image targets Jetson (aarch64); got $(uname -m)." >&2; exit 1; \
+    fi
+
+# ------------------------------------------------------------------------------
+# JetPack 7.2 / L4T r39.2 developer components.
+# The base image already configures the Jetson 'common r39.2' apt repository
+# and the CUDA / TensorRT / OpenCV pins.
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bc \
+        build-essential \
+        bzip2 \
+        can-utils \
+        ca-certificates \
+        curl \
+        file \
+        git \
+        gnupg2 \
+        gstreamer1.0-alsa \
+        gstreamer1.0-libav \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-ugly \
+        gstreamer1.0-tools \
+        gstreamer1.0-x \
+        i2c-tools \
+        iproute2 \
+        iputils-ping \
+        iw \
+        kbd \
+        kmod \
+        language-pack-en-base \
+        less \
+        libcanberra-gtk3-module \
+        libdrm-dev \
+        libgles2 \
+        libglvnd-dev \
+        libgtk-3-0 \
+        libudev1 \
+        libvulkan1 \
+        libxv1 \
+        libzmq5 \
+        locales \
+        lsb-release \
+        mtd-utils \
+        nano \
+        openssh-client \
+        parted \
+        pciutils \
+        procps \
+        python-is-python3 \
+        python3 \
+        python3-pexpect \
+        python3-pip \
+        python3-pip-whl \
+        python3-numpy \
+        python3-setuptools \
+        python3-wheel \
+        python3-yaml \
+        rsync \
+        sox \
+        sudo \
+        udev \
+        vulkan-tools \
+        wget \
+        wireless-tools \
+        wpasupplicant \
+        x11-apps \
+        xauth \
+        xxd \
+        zstd \
+    && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# The r39.2 repository ships CUDA 13.2. cuDNN is pinned to the JetPack version
+# for this step only: the CUDA repository configured by the base image offers
+# a newer one, which the JetPack nvidia-cudnn-dev meta-package does not accept.
+# nvidia-opencv-dev (OpenCV 4.8) is not installed: the base image pins OpenCV
+# to Ubuntu's 4.6, which the ROS packages are built against.
+RUN mkdir -p /lib/firmware/ \
+    && printf 'Package: libcudnn9*\nPin: version 9.20.0.46-1\nPin-Priority: 1001\n' \
+         > /etc/apt/preferences.d/zed-jetpack-cudnn.pref \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        cuda-toolkit-13-2 \
+        cuda-libraries-13-2 \
+        libcudla-dev-13-2 \
+        nvidia-cudnn-dev \
+        nvidia-tensorrt-dev \
+        nvidia-vpi-dev \
+    && rm -rf /etc/apt/preferences.d/zed-jetpack-cudnn.pref /var/lib/apt/lists/*
+
+# cuda-compat has a postinst that fights the driver install inside a
+# container; extract it manually instead of installing it.
+RUN cd /tmp \
+    && apt-get update && apt-get download cuda-compat-13-2 \
+    && dpkg-deb -R ./cuda-compat-13-2_*_arm64.deb ./cuda-compat \
+    && cp -r ./cuda-compat/usr/local/* /usr/local/ \
+    && rm -rf ./cuda-compat-13-2_*_arm64.deb ./cuda-compat /var/lib/apt/lists/*
+
+ENV CUDA_HOME="/usr/local/cuda"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64"
+
+# Detect the live GPU's compute capability at container start and export
+# TORCH_CUDA_ARCH_LIST with the correct arch for Jetson Thor or Orin.
+# Sourced by the base image's workspace-entrypoint.sh, so it must not exit.
+COPY --chmod=755 <<'EOF' /usr/local/bin/scripts/entrypoint_additions/cuda-arch.sh
+#!/usr/bin/env bash
+if [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]] && [[ -x /usr/local/cuda/bin/__nvcc_device_query ]]; then
+    cuda_cap="$(/usr/local/cuda/bin/__nvcc_device_query 2>/dev/null || true)"
+    if [[ "${cuda_cap}" =~ ^[0-9]+$ ]]; then
+        export TORCH_CUDA_ARCH_LIST="${cuda_cap%?}.${cuda_cap: -1}"
+    fi
+    unset cuda_cap
+fi
+EOF
+
+# Tegra userspace library paths and NVIDIA EGL / Wayland ICDs. On L4T r39.x
+# the tegra userspace libs live under aarch64-linux-gnu/nvidia; the NVIDIA
+# container runtime bind-mounts the host libs into these paths. Mesa's EGL ICD
+# is removed so the NVIDIA one is used.
+RUN echo "/usr/lib/aarch64-linux-gnu/nvidia"     >  /etc/ld.so.conf.d/nvidia-tegra.conf \
+    && echo "/usr/lib/aarch64-linux-gnu/tegra"      >> /etc/ld.so.conf.d/nvidia-tegra.conf \
+    && echo "/usr/lib/aarch64-linux-gnu/tegra-egl"  >> /etc/ld.so.conf.d/nvidia-tegra.conf \
+    && rm -f /usr/share/glvnd/egl_vendor.d/50_mesa.json \
+    && mkdir -p /usr/share/glvnd/egl_vendor.d/ /usr/share/egl/egl_external_platform.d/ \
+    && printf '{\n  "file_format_version" : "1.0.0",\n  "ICD" : { "library_path" : "libEGL_nvidia.so.0" }\n}\n' \
+         > /usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+    && printf '{\n  "file_format_version" : "1.0.0",\n  "ICD" : { "library_path" : "libnvidia-egl-wayland.so.1" }\n}\n' \
+         > /usr/share/egl/egl_external_platform.d/nvidia_wayland.json \
+    && ldconfig
+
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# ------------------------------------------------------------------------------
+# ZED SDK (Jetson build for L4T r39.2), downloaded and verified at build time.
+# The python API and the kernel drivers are skipped: the wrapper is C++ and
+# the ZED Mini is a USB camera.
+# ------------------------------------------------------------------------------
+ARG ZED_SDK_URL=https://download.stereolabs.com/zedsdk/5.5/l4t39.2/jetsons
+ARG ZED_SDK_SHA256=48b5e9b299db3dbc68aa3aecacce29904bfb28ae6e2cb30aa82616ced05171a8
+RUN cd /tmp \
+    && wget -q -O ZED_SDK_Linux.run "${ZED_SDK_URL}" \
+    && echo "${ZED_SDK_SHA256}  ZED_SDK_Linux.run" | sha256sum -c - \
+    && chmod +x ZED_SDK_Linux.run \
+    && apt-get update \
+    && ./ZED_SDK_Linux.run silent skip_python skip_drivers \
+    && rm -rf ZED_SDK_Linux.run /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
+# zed-ros2-wrapper, built into /opt/ros_ws
+# ------------------------------------------------------------------------------
+ARG ROS_DISTRO=lyrical
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV ROS_ROOT=/opt/ros/${ROS_DISTRO}
+
+ARG ZED_WRAPPER_VERSION=v5.5.0
+ENV ISAAC_ROS_WS=/opt/ros_ws
+
+RUN mkdir -p ${ISAAC_ROS_WS}/src && cd ${ISAAC_ROS_WS} \
+    && git clone --depth 1 --recurse-submodules -b ${ZED_WRAPPER_VERSION} \
+        https://github.com/stereolabs/zed-ros2-wrapper.git src/zed-ros2-wrapper \
+    && apt-get update \
+    && source "${ROS_ROOT}/setup.bash" \
+    && rosdep update \
+    && rosdep install --from-paths src/zed-ros2-wrapper --ignore-src -r -y \
+    # zed_description (needed by the zed_wrapper launch files) and
+    # zstd_image_transport have no rosdep key for noble, so rosdep skips them.
+    && apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-zed-description \
+        ros-${ROS_DISTRO}-zstd-image-transport \
+    && colcon build --symlink-install --packages-up-to zed_wrapper \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "source ${ISAAC_ROS_WS}/install/setup.bash" >> /etc/bash.bashrc
+
+# ------------------------------------------------------------------------------
+# wheelbots apt dependencies and RViz plugins
+#
+# ros-lyrical-pcl-ros / pcl-conversions are deliberately absent: on noble they
+# depend on libpcl 1.15, which Ubuntu 24.04 does not ship. The only PCL user
+# in this workspace is the COLCON_IGNOREd lslidar_driver.
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-nav2-bringup \
+        ros-${ROS_DISTRO}-nav2-msgs \
+        ros-${ROS_DISTRO}-nav2-map-server \
+        ros-${ROS_DISTRO}-slam-toolbox \
+        ros-${ROS_DISTRO}-robot-localization \
+        ros-${ROS_DISTRO}-ackermann-msgs \
+        ros-${ROS_DISTRO}-diagnostic-updater \
+        ros-${ROS_DISTRO}-image-publisher \
+        ros-${ROS_DISTRO}-camera-info-manager \
+        ros-${ROS_DISTRO}-joint-state-publisher \
+        ros-${ROS_DISTRO}-filters \
+        ros-${ROS_DISTRO}-async-web-server-cpp \
+        ros-${ROS_DISTRO}-v4l2-camera \
+        ros-${ROS_DISTRO}-web-video-server \
+        ros-${ROS_DISTRO}-foxglove-bridge \
+        ros-${ROS_DISTRO}-rosbridge-server \
+        ros-${ROS_DISTRO}-rosapi \
+        ros-${ROS_DISTRO}-teleop-twist-keyboard \
+        ros-${ROS_DISTRO}-joy-linux \
+        ros-${ROS_DISTRO}-tf2-tools \
+        ros-${ROS_DISTRO}-rviz2 \
+        ros-${ROS_DISTRO}-rmf-visualization-rviz2-plugins \
+        ros-${ROS_DISTRO}-rviz-2d-overlay-plugins \
+        ros-${ROS_DISTRO}-vision-msgs-rviz-plugins \
+        libpcap0.8-dev \
+        libyaml-cpp-dev \
+        libeigen3-dev \
+        libssl-dev \
+        libgflags-dev \
+        v4l-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
+# Isaac ROS packages for a ZED stereo camera on a Nav2 robot (about 7 GB:
+# cuvslam and the nvblox metapackage depend on the DNN stack, including
+# Triton and TensorRT, so those come along).
+# Override with --build-arg ISAAC_ROS_PACKAGES="..." or pass an empty value
+# to skip the layer.
+#   nvblox            3D reconstruction from depth -> Nav2 costmap layer, RViz plugin
+#   cuvslam           stereo-inertial visual odometry / SLAM
+#   isaac-ros-zed     launch fragment wiring the ZED wrapper into Isaac ROS graphs
+#   image pipeline    GPU rectify / resize / stereo / depth conversions
+#   apriltag          fiducial detection (docking, landmarks)
+#   occupancy-grid-localizer   global localization of a lidar scan in a saved map
+#   jetson-stats      board power / thermal diagnostics as ROS topics
+#   cuda-buffer-backend        CUDA storage for rosidl::Buffer message fields
+# ------------------------------------------------------------------------------
+ARG ISAAC_ROS_PACKAGES="\
+    ros-lyrical-isaac-ros-nvblox \
+    ros-lyrical-nvblox-nav2 \
+    ros-lyrical-nvblox-rviz-plugin \
+    ros-lyrical-isaac-ros-cuvslam \
+    ros-lyrical-isaac-ros-visual-slam-interfaces \
+    ros-lyrical-isaac-ros-zed \
+    ros-lyrical-isaac-ros-image-proc \
+    ros-lyrical-isaac-ros-stereo-image-proc \
+    ros-lyrical-isaac-ros-depth-image-proc \
+    ros-lyrical-isaac-ros-apriltag \
+    ros-lyrical-isaac-ros-occupancy-grid-localizer \
+    ros-lyrical-isaac-ros-jetson-stats \
+    ros-lyrical-isaac-ros-examples \
+    ros-lyrical-cuda-buffer-backend"
+RUN if [[ -n "${ISAAC_ROS_PACKAGES// /}" ]]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends ${ISAAC_ROS_PACKAGES} \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# ros-lyrical-cuda-buffer-backend depends on Ubuntu's desktop driver userspace
+# (libnvidia-compute-580), whose libnvidia-ml / libcuda land in
+# /usr/lib/aarch64-linux-gnu and shadow the Jetson's own libraries that the
+# NVIDIA runtime mounts under .../nvidia; nvidia-smi then fails with
+# "Driver/library version mismatch". Listing the Tegra directories first in
+# the loader configuration makes the host's libraries win.
+RUN mv /etc/ld.so.conf.d/nvidia-tegra.conf /etc/ld.so.conf.d/000-nvidia-tegra.conf && ldconfig
+
+# ------------------------------------------------------------------------------
+# PyTorch (CUDA 13.2 wheels) and the robot_memory Python dependencies, in a
+# venv at /opt/robot-venv.
+#
+# A venv rather than system pip: Ubuntu's Python is externally managed, and
+# torch brings numpy 2.x, which must not replace the numpy 1.26 that the ROS
+# Python packages (cv_bridge, ...) are built against. drive_test.sh puts
+# ROBOT_VENV_SITE on PYTHONPATH for the memory_node process only.
+# ------------------------------------------------------------------------------
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu132
+ENV ROBOT_VENV=/opt/robot-venv
+ENV ROBOT_VENV_SITE=${ROBOT_VENV}/lib/python3.12/site-packages
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv ${ROBOT_VENV} \
+    && ${ROBOT_VENV}/bin/pip install --no-cache-dir --upgrade pip \
+    && ${ROBOT_VENV}/bin/pip install --no-cache-dir torch torchvision --index-url ${TORCH_INDEX_URL} \
+    && ${ROBOT_VENV}/bin/pip install --no-cache-dir \
+        "transformers>=4.45" accelerate safetensors pillow sentence-transformers chromadb einops
+
+# ------------------------------------------------------------------------------
+# wheelbots workspace: this repository, built into the image.
+# --symlink-install keeps the install space pointing at the sources, so
+# scripts/docker_run.sh --dev can bind-mount a checkout over them and have
+# launch/config/Python edits take effect without a rebuild.
+# ------------------------------------------------------------------------------
+ENV WHEELBOTS_WS=/opt/wheelbots_ws
+ENV WHEELBOTS=${WHEELBOTS_WS}/src/wheelbots
+ENV WHEELBOTS_INSTALL=${WHEELBOTS_WS}/install
+
+COPY . ${WHEELBOTS}
+
+RUN cd ${WHEELBOTS_WS} \
+    && source ${ISAAC_ROS_WS}/install/setup.bash \
+    && colcon build --symlink-install \
+    && rm -rf log
+
+# Keep root-owned __pycache__ out of bind-mounted checkouts.
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN echo '[ -f "${WHEELBOTS_INSTALL}/setup.bash" ] && source "${WHEELBOTS_INSTALL}/setup.bash"' >> /etc/bash.bashrc
+
+WORKDIR ${WHEELBOTS_WS}
+CMD ["/bin/bash"]

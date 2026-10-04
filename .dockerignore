@@ -1,0 +1,16 @@
+# Build context for docker/Dockerfile.rosbot2 (the context is the repo root).
+.git
+build/
+install/
+log/
+images/
+**/__pycache__
+**/*.egg-info
+
+# COLCON_IGNOREd vendor trees that are never built (Astra camera, M10 lidar).
+vendor/OrbbecSDK_ROS2
+vendor/lslidar_m10
+
+# Personal notes and local-only files.
+scott/
+isaac-ros-zed-notes.txt
