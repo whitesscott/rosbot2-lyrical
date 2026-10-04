@@ -1,0 +1,67 @@
+# wheelbots layer on top of the Isaac ROS + ZED image (ROS 2 Lyrical).
+#
+# The base image is built by isaac-ros-cli from docker/Dockerfile.isaac_ros +
+# docker/Dockerfile.zed and already carries ROS 2 Lyrical, CUDA, the ZED SDK
+# and the zed-ros2-wrapper workspace in /opt/ros_ws. This layer only adds the
+# apt dependencies of the wheelbots workspace; the workspace itself is
+# bind-mounted and built at runtime by scripts/docker_run.sh.
+#
+# Build (from the repo root):
+#   ./scripts/docker_run.sh image
+ARG BASE_IMAGE=isaac_ros_dev-zed:latest
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG ROS_DISTRO=lyrical
+
+# ros-lyrical-pcl-ros / pcl-conversions are deliberately absent: on noble they
+# depend on libpcl 1.15, which Ubuntu 24.04 does not ship. The only PCL user
+# in this workspace is the COLCON_IGNOREd lslidar_driver.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-nav2-bringup \
+        ros-${ROS_DISTRO}-nav2-msgs \
+        ros-${ROS_DISTRO}-nav2-map-server \
+        ros-${ROS_DISTRO}-slam-toolbox \
+        ros-${ROS_DISTRO}-robot-localization \
+        ros-${ROS_DISTRO}-ackermann-msgs \
+        ros-${ROS_DISTRO}-diagnostic-updater \
+        ros-${ROS_DISTRO}-image-publisher \
+        ros-${ROS_DISTRO}-camera-info-manager \
+        ros-${ROS_DISTRO}-joint-state-publisher \
+        ros-${ROS_DISTRO}-filters \
+        ros-${ROS_DISTRO}-async-web-server-cpp \
+        ros-${ROS_DISTRO}-v4l2-camera \
+        ros-${ROS_DISTRO}-web-video-server \
+        ros-${ROS_DISTRO}-foxglove-bridge \
+        ros-${ROS_DISTRO}-rosbridge-server \
+        ros-${ROS_DISTRO}-teleop-twist-keyboard \
+        ros-${ROS_DISTRO}-joy-linux \
+        ros-${ROS_DISTRO}-tf2-tools \
+        libpcap0.8-dev \
+        libyaml-cpp-dev \
+        libeigen3-dev \
+        libssl-dev \
+        libgflags-dev \
+        v4l-utils \
+        iproute2 \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# The colcon workspace lives outside the bind-mounted repo (in a named volume,
+# see scripts/docker_run.sh) so build/install/log of this distro never mix
+# with a host-side build of another one.
+ENV WHEELBOTS_WS=/opt/wheelbots_ws
+ENV WHEELBOTS=${WHEELBOTS_WS}/src/wheelbots
+ENV WHEELBOTS_INSTALL=${WHEELBOTS_WS}/install
+
+# robot_memory (ai/robot_memory) needs torch + transformers. They are not
+# baked into the image: docker_run.sh mounts the host's uv venv here and
+# drive_test.sh puts it on PYTHONPATH for the memory_node process only.
+ENV ROBOT_VENV_SITE=/opt/robot-venv/lib/python3.12/site-packages
+
+RUN echo '[ -f "${WHEELBOTS_INSTALL}/setup.bash" ] && source "${WHEELBOTS_INSTALL}/setup.bash"' >> /etc/bash.bashrc
+
+WORKDIR ${WHEELBOTS_WS}
+CMD ["/bin/bash"]

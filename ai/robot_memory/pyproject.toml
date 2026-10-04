@@ -1,0 +1,9 @@
+# Minimal pyproject.toml: only declares the build backend so `pip install -e .`
+# works. All package metadata (name, version, deps, entry points, data files)
+# lives in setup.py, which is authoritative for both pip and colcon
+# (ament_python) builds. Keeping metadata in one place avoids the two build
+# systems disagreeing at colcon build time.
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"

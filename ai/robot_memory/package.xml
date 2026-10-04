@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_memory</name>
+  <version>0.1.0</version>
+  <description>
+    Spatial memory for a ROS 2 mobile robot: keyframe VLM captioning +
+    semantic query, on-device. The ROS node subscribes to an image
+    topic and the TF tree, fires keyframes on pose delta, and hands
+    them off to a background worker that captions with Qwen3-VL-2B,
+    embeds with BGE-small, and persists to Chroma.
+  </description>
+  <maintainer email="whitesscott@comcast.net">Scott Whites</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <!-- cv_bridge deliberately omitted: its boost ext is linked against
+       numpy 1.x while our venv needs numpy>=2 for scipy/sklearn.
+       memory_node decodes rgb8/bgr8 sensor_msgs/Image via np.frombuffer. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

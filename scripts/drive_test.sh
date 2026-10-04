@@ -8,27 +8,36 @@
 #   ./scripts/drive_test.sh
 #
 # Env feature flags (all default off unless noted):
-#   ENABLE_ROSBRIDGE=1    (default 1)  serve rosbridge on :9090
-#                                       for the iPhone Wheeltec app
+#   ENABLE_ROSBRIDGE=1    (default 1)  serve rosbridge + rosapi on :9090
+#                                       for the iPhone Wheeltec app and
+#                                       MCP clients (ros-mcp)
 #   ENABLE_WEB_VIDEO=1    stream /image_raw at :8080 (Foxglove already
 #                          covers this, so default off)
-#   ENABLE_MEMORY_NODE=1  also run the robot-map VLM captioner
-#                          (needs ~/.venvs/robot; adds ~25 s startup)
+#   ENABLE_MEMORY_NODE=1  also run the robot_memory VLM captioner
+#                          (ai/robot_memory; needs the torch venv, see
+#                          ROBOT_VENV_SITE; adds ~25 s startup)
+#   ENABLE_CAMERA=0       (default 1)  skip the v4l2 UVC camera, e.g. when
+#                          the ZED wrapper publishes images instead
+#   IMAGE_TOPIC=<topic>   image topic for memory_node (default /image_raw)
 #
-# Assumes bootstrap.sh has been run on the Orin and the wheelbots
-# workspace has been colcon-built.
+# Runs either on the host (after bootstrap.sh + colcon build) or inside the
+# Lyrical container (scripts/docker_run.sh), where the image presets
+# ROS_DISTRO, WHEELBOTS_INSTALL and ROBOT_VENV_SITE.
 
 set -uo pipefail
 
-WHEELBOTS="${HOME}/.git/wheelbots"
-ROBOTMAP="${HOME}/.git/robot-map"
-ROS_DISTRO="${ROS_DISTRO:-kilted}"
+WHEELBOTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WHEELBOTS_INSTALL="${WHEELBOTS_INSTALL:-${WHEELBOTS}/install}"
+ROS_DISTRO="${ROS_DISTRO:-lyrical}"
+ROBOT_VENV_SITE="${ROBOT_VENV_SITE:-${HOME}/.venvs/robot/lib/python3.12/site-packages}"
 LOG_DIR="/tmp/drive_test_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
 ENABLE_ROSBRIDGE="${ENABLE_ROSBRIDGE:-1}"
 ENABLE_WEB_VIDEO="${ENABLE_WEB_VIDEO:-0}"
 ENABLE_MEMORY_NODE="${ENABLE_MEMORY_NODE:-0}"
+ENABLE_CAMERA="${ENABLE_CAMERA:-1}"
+IMAGE_TOPIC="${IMAGE_TOPIC:-/image_raw}"
 
 # --- source ROS + overlays ------------------------------------------------
 
@@ -36,9 +45,7 @@ set +u
 # shellcheck disable=SC1091
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 # shellcheck disable=SC1091
-[ -f "${WHEELBOTS}/install/setup.bash" ] && source "${WHEELBOTS}/install/setup.bash"
-# shellcheck disable=SC1091
-[ -f "${ROBOTMAP}/install/setup.bash" ]  && source "${ROBOTMAP}/install/setup.bash"
+[ -f "${WHEELBOTS_INSTALL}/setup.bash" ] && source "${WHEELBOTS_INSTALL}/setup.bash"
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
 export PYTHONUNBUFFERED=1
@@ -84,6 +91,7 @@ cleanup() {
     # (e.g. `less some_rosbridge.log`).
     pkill -x static_transform_publisher 2>/dev/null
     pkill -x rosbridge_websocket 2>/dev/null
+    pkill -x rosapi_node 2>/dev/null
     pkill -x web_video_server 2>/dev/null
     pkill -f 'install/[^/]*/lib/[^/]*/(wheeltec_robot_node|sllidar_node|v4l2_camera_node|async_slam_toolbox_node|memory_node|foxglove_bridge)$' 2>/dev/null
     pkill -f 'install/turn_on_wheeltec_robot/lib/turn_on_wheeltec_robot/cmd_vel_to_ackermann_drive\.py$' 2>/dev/null
@@ -108,10 +116,12 @@ start base       ros2 launch turn_on_wheeltec_robot turn_on_wheeltec_robot.launc
 sleep 3
 start lidar      ros2 launch turn_on_wheeltec_robot wheeltec_lidar.launch.py
 sleep 2
-start camera     ros2 launch turn_on_wheeltec_robot wheeltec_camera_uvc.launch.py
-sleep 2
+if [ "${ENABLE_CAMERA}" = "1" ]; then
+    start camera ros2 launch turn_on_wheeltec_robot wheeltec_camera_uvc.launch.py
+    sleep 2
+fi
 
-SLAM_CFG="${WHEELBOTS}/install/wheeltec_slam_toolbox/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml"
+SLAM_CFG="$(ros2 pkg prefix wheeltec_slam_toolbox 2>/dev/null)/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml"
 # Guard: without the install-space params file, slam_toolbox exits silently
 # and the operator drives thinking mapping is happening.
 if [ ! -f "$SLAM_CFG" ]; then
@@ -126,6 +136,9 @@ start slam       ros2 run slam_toolbox async_slam_toolbox_node \
 if [ "${ENABLE_ROSBRIDGE}" = "1" ]; then
     sleep 2
     start rosbridge ros2 run rosbridge_server rosbridge_websocket
+    # rosapi answers the /rosapi/* introspection services (topic, service,
+    # node and parameter listings) that MCP clients such as ros-mcp rely on.
+    start rosapi    ros2 run rosapi rosapi_node
 fi
 
 if [ "${ENABLE_WEB_VIDEO}" = "1" ]; then
@@ -139,7 +152,7 @@ if [ "${ENABLE_MEMORY_NODE}" = "1" ]; then
     # exported PYTHONPATH into the parent shell, and the venv's numpy/urllib3
     # then infected the subsequent `ros2` CLI calls (lifecycle set,
     # node list), silently breaking slam_toolbox activation.
-    VENV_SITE="${HOME}/.venvs/robot/lib/python3.12/site-packages"
+    VENV_SITE="${ROBOT_VENV_SITE}"
     if [ ! -d "$VENV_SITE" ]; then
         echo "  ! memory_node skipped: $VENV_SITE not found (rebuild venv?)"
     else
@@ -147,7 +160,8 @@ if [ "${ENABLE_MEMORY_NODE}" = "1" ]; then
             HF_HOME="${HOME}/.cache/huggingface" \
             HF_HUB_CACHE="${HOME}/.cache/huggingface/hub" \
             PYTHONPATH="${VENV_SITE}${PYTHONPATH:+:${PYTHONPATH}}" \
-            ros2 run robot_memory memory_node
+            ros2 run robot_memory memory_node \
+            --ros-args -p image_topic:="${IMAGE_TOPIC}"
     fi
 fi
 
@@ -156,8 +170,20 @@ fi
 echo ""
 echo "[drive_test] waiting for /slam_toolbox to register..."
 if wait_for_node "/slam_toolbox" 30; then
-    if ros2 lifecycle set /slam_toolbox configure > /dev/null 2>&1 && \
-       ros2 lifecycle set /slam_toolbox activate  > /dev/null 2>&1; then
+    # The node shows up in `ros2 node list` before its lifecycle services
+    # are discoverable, so a transition requested right away can fail.
+    # Retry until the node reports active.
+    slam_state=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        slam_state="$(ros2 lifecycle get /slam_toolbox 2>/dev/null | awk '{print $1}')"
+        case "${slam_state}" in
+            active)       break ;;
+            unconfigured) ros2 lifecycle set /slam_toolbox configure > /dev/null 2>&1 ;;
+            inactive)     ros2 lifecycle set /slam_toolbox activate  > /dev/null 2>&1 ;;
+            *)            sleep 2 ;;
+        esac
+    done
+    if [ "${slam_state}" = "active" ]; then
         echo "[drive_test] slam_toolbox active"
     else
         echo "[drive_test] !! slam_toolbox activation FAILED — check ${LOG_DIR}/slam.log"

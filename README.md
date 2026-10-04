@@ -183,6 +183,16 @@ On the `kilted` branch (AGX Orin / JetPack 7.2.1 / Ubuntu 24.04 / ROS 2 Kilted),
 
 See [`docs/bootstrap.md`](docs/bootstrap.md) for what it does, what it deliberately skips, and how to port the setup to another Orin.
 
+On the `lyrical` branch the stack runs in a container on top of the Isaac ROS + ZED image (ROS 2 Lyrical), together with the `robot_memory` VLM node in `ai/`:
+
+```sh
+./scripts/docker_run.sh image   # build wheelbots:lyrical
+./scripts/docker_run.sh build   # colcon build inside the container
+./scripts/docker_run.sh /opt/wheelbots_ws/src/wheelbots/scripts/drive_test.sh
+```
+
+See [`docs/docker_lyrical.md`](docs/docker_lyrical.md).
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- USAGE EXAMPLES -->

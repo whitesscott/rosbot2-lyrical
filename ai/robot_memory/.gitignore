@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# venvs
+.venv/
+venv/
+
+# Editors
+.idea/
+.vscode/
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime artifacts — never commit
+chroma_db/            # persistent vector DB
+keyframes/            # thumbnail images captured at runtime
+data/                 # any large data pulls
+logs/                 # runtime log files
+
+# Model weights: rely on ~/.cache/huggingface/hub, never bundle
+models/
+
+# ROS 2 build artifacts (when the ROS wrapper is added)
+install/
+log/

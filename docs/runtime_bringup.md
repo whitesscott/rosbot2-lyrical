@@ -2,6 +2,8 @@
 
 The exact commands to bring up every ROS 2 subsystem currently running against the physical robot. Assumes `scripts/bootstrap.sh` has been run and the workspace is built. Each command block is one terminal — open five, or background them in one.
 
+> On the `lyrical` branch run these inside the container (`./scripts/docker_run.sh`), where ROS and the workspace are already sourced and the install space is `/opt/wheelbots_ws/install` rather than `~/.git/wheelbots/install`. See [`docker_lyrical.md`](docker_lyrical.md).
+
 ## Preflight (once per shell)
 
 ```sh
