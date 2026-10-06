@@ -317,6 +317,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-${ROS_DISTRO}-rqt-robot-monitor \
     && rm -rf /var/lib/apt/lists/*
 
+# ROS build tools for the venv: with /opt/robot-venv activated, colcon and the
+# rosidl generators run under the venv's Python and need lark and empy there.
+# empy is pinned to the version of Ubuntu's python3-empy, which the ROS
+# templates are written for; empy 4 changed the API.
+RUN ${ROBOT_VENV}/bin/pip install --no-cache-dir lark empy==3.3.4
+
 # ------------------------------------------------------------------------------
 # wheelbots workspace: this repository, built into the image.
 # --symlink-install keeps the install space pointing at the sources, so

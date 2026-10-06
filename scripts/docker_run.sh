@@ -29,6 +29,10 @@
 # Environment:
 #   WHEELBOTS_IMAGE   image tag (default: rosbot2:lyrical)
 #   WHEELBOTS_DEV     1 = same as --dev
+#   ROS_DOMAIN_ID     DDS domain (default: 10). Machines that should see each
+#                     other's topics (Orin, Thor) must use the same value.
+#   RMW_IMPLEMENTATION  middleware (default: rmw_fastrtps_cpp, the only one in
+#                     the image). Must also match across machines.
 #   ROBOT_VENV        host venv to mount over the image's /opt/robot-venv
 #                     (default: unset, use the venv in the image)
 #   ISAAC_ROS_WS      Isaac ROS workspace to mount (default: ~/workspaces/isaac_ros-dev)
@@ -91,6 +95,9 @@ if [ -n "${DISPLAY:-}" ]; then
   case "$DISPLAY" in
     :*) xhost +si:localuser:root > /dev/null 2>&1 || true ;;
   esac
+else
+  echo "note: DISPLAY is not set, so GUI tools (rviz2, rqt) will not open." >&2
+  echo "      Connect with 'ssh -X', or run from a terminal in the desktop session." >&2
 fi
 
 # --dev: this checkout over the baked sources, build tree in a named volume.
@@ -137,7 +144,9 @@ if [ -S /run/jtop.sock ]; then
 fi
 
 # Runs once, as root, before the command when the container is created.
-START_SETUP='if [ -n "${JTOP_GID:-}" ] && ! getent group "$JTOP_GID" > /dev/null; then
+START_SETUP='# Qt wants a private runtime directory; without one it warns on every start.
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+if [ -n "${JTOP_GID:-}" ] && ! getent group "$JTOP_GID" > /dev/null; then
   groupadd -g "$JTOP_GID" jtop 2> /dev/null || true
 fi
 exec "$@"'
@@ -152,7 +161,10 @@ exec docker run "${TTY_ARGS[@]}" --rm --name "$NAME" \
   --network host --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix "${X11_ARGS[@]}" \
-  -e ROS_DOMAIN_ID -e ROS_AUTOMATIC_DISCOVERY_RANGE -e ROS_STATIC_PEERS -e RMW_IMPLEMENTATION \
+  -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}" \
+  -e RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" \
+  -e ROS_AUTOMATIC_DISCOVERY_RANGE -e ROS_STATIC_PEERS \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -e ENABLE_ROSBRIDGE -e ENABLE_WEB_VIDEO -e ENABLE_MEMORY_NODE -e ENABLE_CAMERA -e IMAGE_TOPIC \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -v /dev:/dev \
