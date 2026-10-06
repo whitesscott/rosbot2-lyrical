@@ -120,6 +120,28 @@ if [ -d "$ZED_RESOURCES" ] && [ -n "$(ls -A "$ZED_RESOURCES")" ]; then
   OPT_ARGS+=(-v "$ZED_RESOURCES":/usr/local/zed/resources)
 fi
 
+# jtop: the service runs on the host; the client in the image talks to its
+# socket. Only mounted when it exists: docker would otherwise create a
+# directory at that path on the host.
+# The socket is group-owned by the host's 'jtop' group, whose GID differs per
+# machine (it is whatever was free when jtop was installed), so it is looked
+# up here and added by number. START_SETUP then gives that GID a name inside
+# the container, which keeps 'groups' in /etc/bash.bashrc from warning that
+# it cannot find a name for the group ID.
+if [ -S /run/jtop.sock ]; then
+  OPT_ARGS+=(-v /run/jtop.sock:/run/jtop.sock)
+  JTOP_GID="$(getent group jtop | cut -d: -f3 || true)"
+  if [ -n "$JTOP_GID" ]; then
+    OPT_ARGS+=(--group-add "$JTOP_GID" -e JTOP_GID="$JTOP_GID")
+  fi
+fi
+
+# Runs once, as root, before the command when the container is created.
+START_SETUP='if [ -n "${JTOP_GID:-}" ] && ! getent group "$JTOP_GID" > /dev/null; then
+  groupadd -g "$JTOP_GID" jtop 2> /dev/null || true
+fi
+exec "$@"'
+
 # Isaac ROS workspace (zed-up.sh, zed-overrides.yaml, visual_slam / nvblox sources).
 if [ -d "$ISAAC_WS" ]; then
   OPT_ARGS+=(-v "$ISAAC_WS":/workspaces/isaac_ros-dev)
@@ -136,4 +158,4 @@ exec docker run "${TTY_ARGS[@]}" --rm --name "$NAME" \
   -v /dev:/dev \
   "${DEV_ARGS[@]}" \
   "${OPT_ARGS[@]}" \
-  "$IMAGE" "$@"
+  "$IMAGE" bash -c "$START_SETUP" bash "$@"

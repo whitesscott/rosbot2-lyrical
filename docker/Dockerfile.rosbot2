@@ -304,6 +304,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
         "transformers>=4.45" accelerate safetensors pillow sentence-transformers chromadb einops
 
 # ------------------------------------------------------------------------------
+# Diagnostics GUI. Kept as its own late layer so adding tools here does not
+# rebuild the large Isaac ROS and PyTorch layers above.
+#
+# jtop needs nothing here: the Isaac ROS jetson-stats package already brings
+# the jtop client, which talks to the host's jtop service through
+# /run/jtop.sock. docker_run.sh mounts the socket and adds the host's jtop
+# group by number (--group-add); the GID differs per host, so no jtop group
+# is created here.
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-rqt-robot-monitor \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
 # wheelbots workspace: this repository, built into the image.
 # --symlink-install keeps the install space pointing at the sources, so
 # scripts/docker_run.sh --dev can bind-mount a checkout over them and have
