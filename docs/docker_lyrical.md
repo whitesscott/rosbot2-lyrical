@@ -53,6 +53,7 @@ The container is `--rm`: it goes away when its first command exits. Everything t
 | `/root/.cache/huggingface` | `~/.cache/huggingface` | model weights |
 | `/root/.local/share/robot-map` | `~/.local/share/robot-map` | keyframe thumbnails + Chroma DB |
 | `/usr/local/zed/{settings,resources}` | `~/.zed/{settings,resources}` | calibration, optimized depth models |
+| `/root/.rviz2` | `~/.rviz2` | RViz layout and persistent settings |
 | `/workspaces/isaac_ros-dev` | `~/workspaces/isaac_ros-dev` | `scripts/zed-up.sh`, Isaac ROS sources; skipped if absent |
 
 The container runs as root, so files it creates in those host directories are root-owned. To use them from the host again: `sudo chown -R $USER ~/.local/share/robot-map`.

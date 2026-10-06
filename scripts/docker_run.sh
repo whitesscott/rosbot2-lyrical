@@ -120,6 +120,12 @@ mkdir -p "$HOME/.cache/huggingface" "$HOME/.local/share/robot-map"
 OPT_ARGS+=(-v "$HOME/.cache/huggingface":/root/.cache/huggingface)
 OPT_ARGS+=(-v "$HOME/.local/share/robot-map":/root/.local/share/robot-map)
 
+# rviz2 keeps its layout and persistent settings in ~/.rviz2; without this it
+# reports "Could not open file: /root/.rviz2/persistent_settings" on every
+# start and forgets the layout when the container exits.
+mkdir -p "$HOME/.rviz2"
+OPT_ARGS+=(-v "$HOME/.rviz2":/root/.rviz2)
+
 # ZED: calibration and optimized neural depth models survive the container.
 mkdir -p "$ZED_SETTINGS"
 OPT_ARGS+=(-v "$ZED_SETTINGS":/usr/local/zed/settings)

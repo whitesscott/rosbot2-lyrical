@@ -2,9 +2,11 @@
 
 The exact commands to bring up every ROS 2 subsystem currently running against the physical robot. Assumes `scripts/bootstrap.sh` has been run and the workspace is built. Each command block is one terminal — open five, or background them in one.
 
-> On the `lyrical` branch run these inside the container (`./scripts/docker_run.sh`), where ROS and the workspace are already sourced and the install space is `/opt/wheelbots_ws/install` rather than `~/.git/wheelbots/install`. See [`docker_lyrical.md`](docker_lyrical.md).
+> On the `lyrical` branch run these inside the container (`./scripts/docker_run.sh`), where ROS and the workspace are already sourced, so the preflight `source` lines are not needed. See [`docker_lyrical.md`](docker_lyrical.md). `scripts/drive_test.sh` runs this whole sequence, including the slam_toolbox activation, in one command.
 
 ## Preflight (once per shell)
+
+Only on a host install (the `kilted` branch); skip in the container:
 
 ```sh
 source /opt/ros/kilted/setup.bash
@@ -51,7 +53,7 @@ Publishes: `/image_raw` YUYV 640×480 @ 30 Hz, `/camera_info`. Depth from the cl
 ```sh
 ros2 run slam_toolbox async_slam_toolbox_node \
     --ros-args \
-    --params-file ~/.git/wheelbots/install/wheeltec_slam_toolbox/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml \
+    --params-file "$(ros2 pkg prefix wheeltec_slam_toolbox)/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml" \
     -r odom:=odometry/filtered
 ```
 
@@ -108,14 +110,14 @@ sudo shutdown -h now
 
 ## Backgrounded / one-shell variant (for scripts or SSH sessions)
 
-If you want the same stack from a single shell (staggered so each stage settles before the next), see the pattern used in the transcript log at `/tmp/claude-.../scratchpad/*.log`. Not committed as a script yet — worth doing next if this becomes a routine bring-up. Sketch:
+`scripts/drive_test.sh` is the maintained version of this: it starts every stage, waits for slam_toolbox and retries its activation, and tears everything down on Ctrl-C. The same stack by hand, from a single shell (staggered so each stage settles before the next):
 
 ```sh
 (ros2 launch turn_on_wheeltec_robot turn_on_wheeltec_robot.launch.py &) ; sleep 3
 (ros2 launch turn_on_wheeltec_robot wheeltec_lidar.launch.py &)         ; sleep 2
 (ros2 launch turn_on_wheeltec_robot wheeltec_camera_uvc.launch.py &)    ; sleep 2
 (ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
-     --params-file ~/.git/wheelbots/install/wheeltec_slam_toolbox/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml \
+     --params-file "$(ros2 pkg prefix wheeltec_slam_toolbox)/share/wheeltec_slam_toolbox/config/mapper_params_online_async.yaml" \
      -r odom:=odometry/filtered &)                                       ; sleep 4
 ros2 lifecycle set /slam_toolbox configure
 ros2 lifecycle set /slam_toolbox activate
