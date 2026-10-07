@@ -81,8 +81,20 @@ TTY_ARGS=(-i)
 [ -t 0 ] && TTY_ARGS+=(-t)
 
 # A second terminal joins the running container instead of failing on the name.
+# It brings its own display along, so a GUI can be opened from an 'ssh -X'
+# terminal even when the container was started from one without a display:
+# the display's X authority cookie is merged into the container first.
 if [ -n "$(docker ps -q -f "name=^${NAME}$")" ]; then
-  exec docker exec "${TTY_ARGS[@]}" "$NAME" "$@"
+  EXEC_ARGS=()
+  if [ -n "${DISPLAY:-}" ]; then
+    EXEC_ARGS+=(-e DISPLAY -e XAUTHORITY=/root/.Xauthority)
+    xauth nlist "$DISPLAY" 2> /dev/null \
+      | docker exec -i "$NAME" xauth -f /root/.Xauthority nmerge - > /dev/null 2>&1 || true
+    case "$DISPLAY" in
+      :*) xhost +si:localuser:root > /dev/null 2>&1 || true ;;
+    esac
+  fi
+  exec docker exec "${TTY_ARGS[@]}" "${EXEC_ARGS[@]}" "$NAME" "$@"
 fi
 
 # X11: pass the X authority file so root in the container can open windows.
@@ -171,7 +183,7 @@ exec docker run "${TTY_ARGS[@]}" --rm --name "$NAME" \
   -e RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" \
   -e ROS_AUTOMATIC_DISCOVERY_RANGE -e ROS_STATIC_PEERS \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
-  -e ENABLE_ROSBRIDGE -e ENABLE_WEB_VIDEO -e ENABLE_MEMORY_NODE -e ENABLE_CAMERA -e IMAGE_TOPIC \
+  -e ENABLE_ROSBRIDGE -e ENABLE_WEB_VIDEO -e ENABLE_MEMORY_NODE -e ENABLE_CAMERA -e ENABLE_JTOP -e IMAGE_TOPIC \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -v /dev:/dev \
   "${DEV_ARGS[@]}" \

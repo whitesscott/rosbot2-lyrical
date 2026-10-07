@@ -16,6 +16,10 @@
 #   ENABLE_MEMORY_NODE=1  also run the robot_memory VLM captioner
 #                          (ai/robot_memory; needs the torch venv, see
 #                          ROBOT_VENV_SITE; adds ~25 s startup)
+#   ENABLE_JTOP=0|1       Jetson board diagnostics (isaac_ros_jetson_stats)
+#                          on /diagnostics_agg; default on when the host's
+#                          jtop socket is mounted. View with
+#                          rqt_robot_monitor or Foxglove's Diagnostics panel
 #   ENABLE_CAMERA=0       (default 1)  skip the v4l2 UVC camera, e.g. when
 #                          the ZED wrapper publishes images instead
 #   IMAGE_TOPIC=<topic>   image topic for memory_node (default /image_raw)
@@ -37,6 +41,9 @@ ENABLE_ROSBRIDGE="${ENABLE_ROSBRIDGE:-1}"
 ENABLE_WEB_VIDEO="${ENABLE_WEB_VIDEO:-0}"
 ENABLE_MEMORY_NODE="${ENABLE_MEMORY_NODE:-0}"
 ENABLE_CAMERA="${ENABLE_CAMERA:-1}"
+if [ -z "${ENABLE_JTOP:-}" ]; then
+    if [ -S /run/jtop.sock ]; then ENABLE_JTOP=1; else ENABLE_JTOP=0; fi
+fi
 IMAGE_TOPIC="${IMAGE_TOPIC:-/image_raw}"
 
 # --- source ROS + overlays ------------------------------------------------
@@ -96,6 +103,8 @@ cleanup() {
     pkill -f 'install/[^/]*/lib/[^/]*/(wheeltec_robot_node|sllidar_node|v4l2_camera_node|async_slam_toolbox_node|memory_node|foxglove_bridge)$' 2>/dev/null
     pkill -f 'install/turn_on_wheeltec_robot/lib/turn_on_wheeltec_robot/cmd_vel_to_ackermann_drive\.py$' 2>/dev/null
     pkill -f 'robot_localization/ekf_node' 2>/dev/null
+    pkill -f 'lib/isaac_ros_jetson_stats/jtop' 2>/dev/null
+    pkill -f 'diagnostic_aggregator/aggregator_node' 2>/dev/null
     pkill -f 'joint_state_publisher/joint_state_publisher' 2>/dev/null
     echo "[drive_test] done"
 }
@@ -139,6 +148,11 @@ if [ "${ENABLE_ROSBRIDGE}" = "1" ]; then
     # rosapi answers the /rosapi/* introspection services (topic, service,
     # node and parameter listings) that MCP clients such as ros-mcp rely on.
     start rosapi    ros2 run rosapi rosapi_node
+fi
+
+if [ "${ENABLE_JTOP}" = "1" ]; then
+    sleep 1
+    start jtop    ros2 launch isaac_ros_jetson_stats jtop.launch.py
 fi
 
 if [ "${ENABLE_WEB_VIDEO}" = "1" ]; then
@@ -207,6 +221,7 @@ cat <<EOF
   Foxglove Studio:    ws://${IP}:8765
 EOF
 [ "${ENABLE_ROSBRIDGE}"  = "1" ] && echo "  iPhone Wheeltec:   ws://${IP}:9090   (or point the app at ${IP})"
+[ "${ENABLE_JTOP}"       = "1" ] && echo "  Board diagnostics: ros2 run rqt_robot_monitor rqt_robot_monitor   (or Foxglove Diagnostics panel)"
 [ "${ENABLE_WEB_VIDEO}"  = "1" ] && echo "  Web video:         http://${IP}:8080/stream_viewer?topic=/image_raw"
 [ "${ENABLE_MEMORY_NODE}" = "1" ] && echo "  memory_node:       tail ${LOG_DIR}/memory.log for captions as you drive"
 
