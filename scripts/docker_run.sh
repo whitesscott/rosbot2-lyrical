@@ -178,6 +178,7 @@ exec docker run "${TTY_ARGS[@]}" --rm --name "$NAME" \
   --runtime=nvidia --gpus=all --privileged \
   --network host --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
+  -e TZ=America/Los_Angeles \
   -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix "${X11_ARGS[@]}" \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}" \
   -e RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" \
